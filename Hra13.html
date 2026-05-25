@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<title>Hra pre Kristínu</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+<style>
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #0f0f0f;
+    font-family: Arial, sans-serif;
+  }
+
+  #menu, #winScreen, #timeUp, #difficulty {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    z-index: 10;
+    padding: 20px;
+  }
+
+  button {
+    padding: 16px 40px;
+    font-size: 24px;
+    border: none;
+    border-radius: 12px;
+    background: #4CAF50;
+    color: white;
+    margin-top: 20px;
+    cursor: pointer;
+  }
+
+  #joystickBase {
+    position: fixed;
+    bottom: 40px;
+    left: 40px;
+    width: 140px;
+    height: 140px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 50%;
+    z-index: 5;
+    touch-action: none;
+  }
+
+  #joystickStick {
+    position: fixed;
+    bottom: 40px;
+    left: 40px;
+    width: 60px;
+    height: 60px;
+    background: rgba(255,255,255,0.35);
+    border-radius: 50%;
+    z-index: 6;
+    touch-action: none;
+    transform: translate(40px, 40px);
+  }
+
+  canvas {
+    touch-action: none;
+    display: block;
+  }
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <h1>🦎 Hra pre Kristínu 🦎</h1>
+  <button onclick="showDifficulty()">Hrať</button>
+</div>
+
+<div id="difficulty" style="display:none;">
+  <h2>Vyber obtiažnosť</h2>
+  <button onclick="setDifficulty('easy')">Ľahká</button>
+  <button onclick="setDifficulty('hard')">Ťažká</button>
+</div>
+
+<div id="winScreen" style="display:none;">
+  <h1>Kika si FAJN hráč 💚🎉</h1>
+  <button onclick="restartGame()">Hrať znova</button>
+</div>
+
+<div id="timeUp" style="display:none;">
+  <h1>⏳ Level zlyhal</h1>
+  <p>Buď ti došiel čas, alebo ťa trafila červená vec.</p>
+  <button onclick="restartLevel()">Skúsiť level znova</button>
+  <button onclick="restartGame()">Späť na menu</button>
+</div>
+
+<div id="joystickBase" style="display:none;"></div>
+<div id="joystickStick" style="display:none;"></div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener("resize", resize);
+
+// chameleón hráča
+let cham = {
+  x: 200,
+  y: window.innerHeight / 2,
+  radius: 40,
+  speed: 4,
+  tongueX: 200,
+  tongueY: window.innerHeight / 2,
+  shooting: false
+};
+
+// nepriateľský chameleón (od levelu 9)
+let enemyCham = null;
+
+// muchy
+let flies = [];
+let levelFliesCaught = 0;
+
+// červené objekty (nebezpečné)
+let hazards = [];
+
+// stav hry
+let score = 0;
+let gameRunning = false;
+let timeLeft = 120;
+let difficulty = "easy";
+let currentLevel = 1;
+let maxLevelEasy = 5;
+let maxLevelHard = 10;
+let timerId = null;
+// joystick
+let joyBase = document.getElementById("joystickBase");
+let joyStick = document.getElementById("joystickStick");
+let joyActive = false;
+let joyStartX = 0;
+let joyStartY = 0;
+let joyX = 0;
+let joyY = 0;
+
+// OVLÁDANIE CEZ KLÁVESNICU (ŠÍPKY)
+let keys = {
+  ArrowUp: false,
+  ArrowDown: false,
+  ArrowLeft: false,
+  ArrowRight: false
+};
+
+window.addEventListener("keydown", (e) => {
+  if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
+});
+
+window.addEventListener("keyup", (e) => {
+  if (keys.hasOwnProperty(e.key)) keys[e.key] = false;
+});
+
+function updateKeyboardMovement() {
+  let speed = cham.speed;
+  if (keys.ArrowUp) cham.y -= speed;
+  if (keys.ArrowDown) cham.y += speed;
+  if (keys.ArrowLeft) cham.x -= speed;
+  if (keys.ArrowRight) cham.x += speed;
+}
+
+// definícia levelov
+const levels = [
+  { fliesTarget: 10, fliesCount: 5, flySpeed: 1.2, hazardsCount: 0, hazardType: "none", hazardSpeed: 0, enemyCham: false, enemySpeed: 0, timeLimit: 120, bgColor: "#0f8f3a" },
+  { fliesTarget: 14, fliesCount: 7, flySpeed: 1.6, hazardsCount: 0, hazardType: "none", hazardSpeed: 0, enemyCham: false, enemySpeed: 0, timeLimit: 110, bgColor: "#0f8f3a" },
+  { fliesTarget: 16, fliesCount: 8, flySpeed: 1.8, hazardsCount: 4, hazardType: "static", hazardSpeed: 0, enemyCham: false, enemySpeed: 0, timeLimit: 100, bgColor: "#0f8f3a" },
+  { fliesTarget: 18, fliesCount: 9, flySpeed: 2.0, hazardsCount: 6, hazardType: "static", hazardSpeed: 0, enemyCham: false, enemySpeed: 0, timeLimit: 90, bgColor: "#0f8f3a" },
+  { fliesTarget: 20, fliesCount: 10, flySpeed: 2.2, hazardsCount: 6, hazardType: "chasing", hazardSpeed: 1.4, enemyCham: false, enemySpeed: 0, timeLimit: 90, bgColor: "#0f8f3a" },
+  { fliesTarget: 22, fliesCount: 10, flySpeed: 2.4, hazardsCount: 8, hazardType: "chasing", hazardSpeed: 1.8, enemyCham: false, enemySpeed: 0, timeLimit: 80, bgColor: "#0f8f3a" },
+  { fliesTarget: 24, fliesCount: 11, flySpeed: 2.6, hazardsCount: 10, hazardType: "chasing-smart", hazardSpeed: 2.0, enemyCham: false, enemySpeed: 0, timeLimit: 75, bgColor: "#0f8f3a" },
+  { fliesTarget: 26, fliesCount: 12, flySpeed: 2.8, hazardsCount: 10, hazardType: "chasing-smart", hazardSpeed: 2.2, enemyCham: false, enemySpeed: 0, timeLimit: 70, bgColor: "#05050a" },
+  { fliesTarget: 28, fliesCount: 12, flySpeed: 3.0, hazardsCount: 10, hazardType: "chasing-smart", hazardSpeed: 2.4, enemyCham: true, enemySpeed: 2.2, timeLimit: 70, bgColor: "#05050a" },
+  { fliesTarget: 30, fliesCount: 13, flySpeed: 3.2, hazardsCount: 12, hazardType: "chasing-smart", hazardSpeed: 2.7, enemyCham: true, enemySpeed: 2.6, timeLimit: 65, bgColor: "#05050a" }
+];
+
+function showDifficulty() {
+  document.getElementById("menu").style.display = "none";
+  document.getElementById("difficulty").style.display = "flex";
+}
+
+function setDifficulty(mode) {
+  difficulty = mode;
+  document.getElementById("difficulty").style.display = "none";
+  startGame();
+}
+
+function difficultyMultiplier() {
+  return difficulty === "hard" ? 1.3 : 1.0;
+}
+
+function spawnFly() {
+  const levelCfg = levels[currentLevel - 1];
+  let speed = levelCfg.flySpeed * difficultyMultiplier();
+
+  flies.push({
+    x: Math.random() * (canvas.width - 350) + 250,
+    y: Math.random() * (canvas.height - 160) + 80,
+    vx: (Math.random() * 2 - 1) * speed,
+    vy: (Math.random() * 2 - 1) * speed
+  });
+}
+
+function initFlies() {
+  flies = [];
+  const levelCfg = levels[currentLevel - 1];
+  for (let i = 0; i < levelCfg.fliesCount; i++) spawnFly();
+}
+
+function initHazards() {
+  hazards = [];
+  const levelCfg = levels[currentLevel - 1];
+  if (levelCfg.hazardsCount <= 0) return;
+
+  for (let i = 0; i < levelCfg.hazardsCount; i++) {
+    hazards.push({
+      x: Math.random() * (canvas.width - 250) + 220,
+      y: Math.random() * (canvas.height - 160) + 80,
+      radius: 22
+    });
+  }
+}
+
+function initEnemyCham() {
+  const levelCfg = levels[currentLevel - 1];
+  if (!levelCfg.enemyCham) {
+    enemyCham = null;
+    return;
+  }
+  enemyCham = {
+    x: canvas.width - 200,
+    y: canvas.height / 2,
+    radius: 38,
+    speed: levelCfg.enemySpeed * difficultyMultiplier()
+  };
+}
+canvas.addEventListener("pointerdown", shootTongue);
+
+function shootTongue(e) {
+  if (!gameRunning) return;
+
+  const rect = canvas.getBoundingClientRect();
+  let mx = e.clientX - rect.left;
+  let my = e.clientY - rect.top;
+
+  cham.shooting = true;
+  cham.tongueX = cham.x;
+  cham.tongueY = cham.y;
+
+  let dx = mx - cham.x;
+  let dy = my - cham.y;
+  let dist = Math.hypot(dx, dy) || 1;
+  let nx = dx / dist;
+  let ny = dy / dist;
+  let step = 0;
+
+  let interval = setInterval(() => {
+    if (!gameRunning) {
+      cham.shooting = false;
+      clearInterval(interval);
+      return;
+    }
+
+    step += 40;
+    cham.tongueX = cham.x + nx * step;
+    cham.tongueY = cham.y + ny * step;
+
+    // zásah muchy
+    flies.forEach((fly, i) => {
+      if (Math.hypot(fly.x - cham.tongueX, fly.y - cham.tongueY) < 40) {
+        flies.splice(i, 1);
+        levelFliesCaught++;
+        spawnFly();
+        checkLevelComplete();
+      }
+    });
+
+    if (step > 650) {
+      cham.shooting = false;
+      clearInterval(interval);
+    }
+  }, 20);
+}
+
+function updateFlies() {
+  flies.forEach(fly => {
+    fly.x += fly.vx;
+    fly.y += fly.vy;
+
+    if (fly.x < 200 || fly.x > canvas.width - 40) fly.vx *= -1;
+    if (fly.y < 40 || fly.y > canvas.height - 40) fly.vy *= -1;
+  });
+}
+
+function updateHazards() {
+  const levelCfg = levels[currentLevel - 1];
+  if (levelCfg.hazardType === "none") return;
+
+  hazards.forEach(h => {
+    if (levelCfg.hazardType === "static") {
+      // nič
+    } else {
+      let dx = cham.x - h.x;
+      let dy = cham.y - h.y;
+      let dist = Math.hypot(dx, dy) || 1;
+      let speed = levelCfg.hazardSpeed * difficultyMultiplier();
+
+      if (levelCfg.hazardType === "chasing-smart") {
+        speed *= 1 + (Math.random() - 0.5) * 0.3;
+      }
+
+      h.x += (dx / dist) * speed;
+      h.y += (dy / dist) * speed;
+    }
+
+    if (Math.hypot(h.x - cham.x, h.y - cham.y) < h.radius + cham.radius - 5) {
+      failLevel();
+    }
+  });
+}
+
+function updateEnemyCham() {
+  if (!enemyCham) return;
+  if (flies.length === 0) return;
+
+  let closest = null;
+  let closestDist = Infinity;
+
+  flies.forEach(f => {
+    let d = Math.hypot(f.x - enemyCham.x, f.y - enemyCham.y);
+    if (d < closestDist) {
+      closestDist = d;
+      closest = f;
+    }
+  });
+
+  if (!closest) return;
+
+  let dx = closest.x - enemyCham.x;
+  let dy = closest.y - enemyCham.y;
+  let dist = Math.hypot(dx, dy) || 1;
+
+  enemyCham.x += (dx / dist) * enemyCham.speed;
+  enemyCham.y += (dy / dist) * enemyCham.speed;
+
+  flies.forEach((f, i) => {
+    if (Math.hypot(f.x - enemyCham.x, f.y - enemyCham.y) < enemyCham.radius + 10) {
+      flies.splice(i, 1);
+      spawnFly();
+    }
+  });
+}
+
+function drawBackground() {
+  const levelCfg = levels[currentLevel - 1];
+  ctx.fillStyle = levelCfg.bgColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (currentLevel >= 8) {
+    for (let i = 0; i < 20; i++) {
+      ctx.fillStyle = `rgba(0,255,150,0.05)`;
+      let r = Math.random() * 200 + 50;
+      let x = Math.random() * canvas.width;
+      let y = Math.random() * canvas.height;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawChameleon() {
+  ctx.fillStyle = "#3ccf4e";
+  ctx.beginPath();
+  ctx.arc(cham.x, cham.y, cham.radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(cham.x + 15, cham.y - 15, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#000000";
+  ctx.beginPath();
+  ctx.arc(cham.x + 17, cham.y - 15, 4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawEnemyChameleon() {
+  if (!enemyCham) return;
+
+  ctx.fillStyle = "#ffcc00";
+  ctx.beginPath();
+  ctx.arc(enemyCham.x, enemyCham.y, enemyCham.radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(enemyCham.x - 15, enemyCham.y - 15, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#000000";
+  ctx.beginPath();
+  ctx.arc(enemyCham.x - 17, enemyCham.y - 15, 4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawTongue() {
+  if (!cham.shooting) return;
+  ctx.strokeStyle = "#ff6b6b";
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.moveTo(cham.x, cham.y);
+  ctx.lineTo(cham.tongueX, cham.tongueY);
+  ctx.stroke();
+}
+
+function drawFlies() {
+  flies.forEach(fly => {
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.arc(fly.x, fly.y, 12, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function drawHazards() {
+  hazards.forEach(h => {
+    ctx.fillStyle = "rgba(255,0,0,0.9)";
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, h.radius, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function drawHUD() {
+  ctx.fillStyle = "white";
+  ctx.font = "28px Arial";
+  ctx.fillText("Muchy: " + levelFliesCaught + "/" + levels[currentLevel - 1].fliesTarget, 30, 50);
+  ctx.fillText("Čas: " + timeLeft + "s", 30, 90);
+  ctx.fillText("Level: " + currentLevel, 30, 130);
+}
+
+function loop() {
+  if (!gameRunning) return;
+
+  updateFlies();
+  updateHazards();
+  updateEnemyCham();
+
+  cham.x += joyX * cham.speed;
+  cham.y += joyY * cham.speed;
+
+  updateKeyboardMovement();
+
+  cham.x = Math.max(80, Math.min(canvas.width - 80, cham.x));
+  cham.y = Math.max(60, Math.min(canvas.height - 60, cham.y));
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawBackground();
+  drawChameleon();
+  drawEnemyChameleon();
+  drawTongue();
+  drawFlies();
+  drawHazards();
+  drawHUD();
+
+  requestAnimationFrame(loop);
+}
+
+function startTimer() {
+  if (timerId) clearInterval(timerId);
+  const levelCfg = levels[currentLevel - 1];
+  timeLeft = Math.round(levelCfg.timeLimit / (difficulty === "hard" ? 1.1 : 1));
+
+  timerId = setInterval(() => {
+    if (!gameRunning) {
+      clearInterval(timerId);
+      return;
+    }
+    timeLeft--;
+    if (timeLeft <= 0) {
+      clearInterval(timerId);
+      failLevel();
+    }
+  }, 1000);
+}
+
+function startGame() {
+  currentLevel = 1;
+  startLevel();
+}
+
+function startLevel() {
+  const levelCfg = levels[currentLevel - 1];
+
+  levelFliesCaught = 0;
+  cham.x = 200;
+  cham.y = canvas.height / 2;
+  cham.shooting = false;
+
+  initFlies();
+  initHazards();
+  initEnemyCham();
+
+  gameRunning = true;
+
+  document.getElementById("joystickBase").style.display = "block";
+  document.getElementById("joystickStick").style.display = "block";
+  document.getElementById("timeUp").style.display = "none";
+  document.getElementById("winScreen").style.display = "none";
+
+  startTimer();
+  requestAnimationFrame(loop);
+}
+
+function checkLevelComplete() {
+  const levelCfg = levels[currentLevel - 1];
+  if (levelFliesCaught >= levelCfg.fliesTarget) {
+    let maxLevel = (difficulty === "easy") ? maxLevelEasy : maxLevelHard;
+    if (currentLevel >= maxLevel) winGame();
+    else {
+      currentLevel++;
+      startLevel();
+    }
+  }
+}
+
+function winGame() {
+  gameRunning = false;
+  if (timerId) clearInterval(timerId);
+  document.getElementById("winScreen").style.display = "flex";
+}
+
+function failLevel() {
+  gameRunning = false;
+  if (timerId) clearInterval(timerId);
+  document.getElementById("timeUp").style.display = "flex";
+}
+
+function restartLevel() {
+  document.getElementById("timeUp").style.display = "none";
+  startLevel();
+}
+
+function restartGame() {
+  gameRunning = false;
+  if (timerId) clearInterval(timerId);
+  document.getElementById("winScreen").style.display = "none";
+  document.getElementById("timeUp").style.display = "none";
+  document.getElementById("joystickBase").style.display = "none";
+  document.getElementById("joystickStick").style.display = "none";
+  showDifficulty();
+}
+
+// JOYSTICK
+joyBase.addEventListener("pointerdown", e => {
+  joyActive = true;
+  joyStartX = e.clientX;
+  joyStartY = e.clientY;
+});
+
+window.addEventListener("pointermove", e => {
+  if (!joyActive) return;
+
+  let dx = e.clientX - joyStartX;
+  let dy = e.clientY - joyStartY;
+
+  let dist = Math.min(50, Math.hypot(dx, dy));
+  let angle = Math.atan2(dy, dx);
+
+  joyX = Math.cos(angle) * (dist / 50);
+  joyY = Math.sin(angle) * (dist / 50);
+
+  joyStick.style.transform =
+    `translate(${40 + joyX * 40}px, ${40 + joyY * 40}px)`;
+});
+
+window.addEventListener("pointerup", () => {
+  joyActive = false;
+  joyX = 0;
+  joyY = 0;
+  joyStick.style.transform = "translate(40px, 40px)";
+});
+</script>
+
+</body>
+</html>
